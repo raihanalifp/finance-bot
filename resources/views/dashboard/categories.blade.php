@@ -1,0 +1,1 @@
+@include('dashboard.categories.index')

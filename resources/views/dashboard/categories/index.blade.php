@@ -1,0 +1,7 @@
+<x-layouts.dashboard title="Categories" eyebrow="CRUD">
+<section class="rounded-[2rem] border border-white/70 bg-white/75 p-5 dark:border-white/10 dark:bg-white/[0.04]">
+@include('dashboard.partials.flash')
+<div class="flex items-center justify-between"><div><h2 class="text-lg font-black">Categories</h2><p class="text-sm text-slate-500">Manage income and expense categories.</p></div><a href="{{ route('dashboard.categories.create') }}" class="rounded-2xl bg-slate-950 px-4 py-2 text-sm font-bold text-white dark:bg-white dark:text-slate-950">New category</a></div>
+<div class="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">@forelse($categories as $category)<div class="rounded-3xl border border-slate-100 p-4 dark:border-white/10"><div class="flex items-center gap-3"><span class="h-10 w-10 rounded-2xl" style="background:{{ $category->color ?? '#64748b' }}"></span><div><p class="font-black">{{ $category->name }}</p><p class="text-sm text-slate-500">{{ $category->type->value }} · {{ $category->slug }}</p></div></div><div class="mt-4"><x-dashboard.partials.actions :show="route('dashboard.categories.show', $category)" :edit="route('dashboard.categories.edit', $category)" :destroy="route('dashboard.categories.destroy', $category)" /></div></div>@empty<div class="rounded-3xl border border-dashed p-8 text-center text-sm text-slate-500">No categories yet.</div>@endforelse</div><div class="mt-5">{{ $categories->links() }}</div>
+</section>
+</x-layouts.dashboard>

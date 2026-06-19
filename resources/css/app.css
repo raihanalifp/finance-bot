@@ -1,0 +1,41 @@
+@import 'tailwindcss';
+
+@source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
+@source '../../storage/framework/views/*.php';
+@source '../**/*.blade.php';
+@source '../**/*.js';
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+    --font-sans: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
+        'Segoe UI Symbol', 'Noto Color Emoji';
+}
+
+* {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(148 163 184 / 0.45) transparent;
+}
+
+body {
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+}
+
+input,
+select,
+textarea {
+    color-scheme: light dark;
+}
+
+.glass-panel {
+    border: 1px solid rgb(255 255 255 / 0.7);
+    background: rgb(255 255 255 / 0.75);
+    box-shadow: 0 24px 80px rgb(15 23 42 / 0.08);
+    backdrop-filter: blur(24px);
+}
+
+.dark .glass-panel {
+    border-color: rgb(255 255 255 / 0.1);
+    background: rgb(255 255 255 / 0.04);
+    box-shadow: 0 24px 80px rgb(0 0 0 / 0.25);
+}
