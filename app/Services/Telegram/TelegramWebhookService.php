@@ -31,6 +31,10 @@ class TelegramWebhookService
             throw new InvalidTelegramPayloadException('Telegram payload does not contain a valid text message.');
         }
 
+        if ($this->alreadyHandled($message)) {
+            return;
+        }
+
         $log = TransactionLog::query()->create([
             'update_id' => $message->updateId,
             'chat_id' => $message->chatId,
@@ -50,6 +54,15 @@ class TelegramWebhookService
 
             $responseText = $this->conversationService->handle($message, $telegramUser, $log);
             $this->telegramApiClient->sendMessage($message->chatId, $responseText);
+            $log->refresh();
+
+            if ($log->status === TransactionLogStatus::Received) {
+                $log->update([
+                    'status' => TransactionLogStatus::Processed,
+                    'processed_at' => now(),
+                ]);
+            }
+
             $this->auditLogService->record(AuditAction::TelegramProcessed, entity: $log, context: [
                 'chat_id' => $message->chatId,
                 'message_id' => $message->messageId,
@@ -90,5 +103,21 @@ class TelegramWebhookService
 
             throw new UnauthorizedTelegramWebhookException('Invalid Telegram webhook secret.');
         }
+    }
+
+    private function alreadyHandled(IncomingTelegramMessageData $message): bool
+    {
+        if ($message->updateId === null || $message->messageId === null) {
+            return false;
+        }
+
+        return TransactionLog::query()
+            ->where('update_id', $message->updateId)
+            ->where('message_id', $message->messageId)
+            ->whereIn('status', [
+                TransactionLogStatus::Parsed->value,
+                TransactionLogStatus::Processed->value,
+            ])
+            ->exists();
     }
 }

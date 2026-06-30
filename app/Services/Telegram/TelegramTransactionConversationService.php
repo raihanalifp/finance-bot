@@ -5,6 +5,7 @@ namespace App\Services\Telegram;
 use App\DTOs\Telegram\IncomingTelegramMessageData;
 use App\Enums\TransactionDraftStatus;
 use App\Enums\TransactionLogStatus;
+use App\Enums\TransactionType;
 use App\Models\Category;
 use App\Models\TransactionDraft;
 use App\Models\TransactionLog;
@@ -13,66 +14,78 @@ use App\Services\Categories\CategoryMemoryService;
 use App\Services\Transactions\TransactionCategoryResolver;
 use App\Services\Transactions\TransactionCreator;
 use App\Services\Transactions\TransactionTextParser;
+use App\Services\Transactions\TransactionValidationService;
 use Throwable;
 
 class TelegramTransactionConversationService
 {
     public function __construct(
+        private readonly CommandRouter $commandRouter,
         private readonly TransactionTextParser $parser,
+        private readonly TransactionValidationService $validationService,
         private readonly TransactionCategoryResolver $categoryResolver,
         private readonly TransactionCreator $transactionCreator,
         private readonly CategoryMemoryService $categoryMemoryService,
-        private readonly TelegramMessageFormatter $messageFormatter,
+        private readonly TelegramResponseService $responseService,
     ) {}
 
     public function handle(IncomingTelegramMessageData $message, TelegramUser $telegramUser, TransactionLog $log): string
     {
         $text = trim($message->text);
 
-        if (str_starts_with($text, '/')) {
-            return $this->handleCommand($text, $telegramUser);
+        if ($this->commandRouter->isCommand($text)) {
+            return $this->commandRouter->handle($text, $telegramUser, $log);
         }
 
         $pendingDraft = $this->pendingDraft($telegramUser);
 
-        if ($pendingDraft && preg_match('/^[1-5]$/', $text)) {
-            return $this->confirmCategory((int) $text, $pendingDraft, $telegramUser, $log);
-        }
-
         if ($pendingDraft) {
-            $pendingDraft->update(['status' => TransactionDraftStatus::Cancelled]);
+            return $this->handlePendingDraft($text, $pendingDraft, $telegramUser, $log);
         }
 
         return $this->createDraftFromText($text, $telegramUser, $log);
     }
 
-    private function handleCommand(string $text, TelegramUser $telegramUser): string
+    private function handlePendingDraft(string $text, TransactionDraft $draft, TelegramUser $telegramUser, TransactionLog $log): string
     {
-        return match (strtolower(strtok($text, ' '))) {
-            '/start' => $this->messageFormatter->startHelp(),
-            '/help' => $this->messageFormatter->inputHelp(),
-            '/cancel' => $this->cancelPendingDraft($telegramUser),
-            default => 'Command belum dikenal. Ketik /help untuk bantuan.',
+        $state = $draft->parser_result['conversation_state'] ?? 'confirm_transaction';
+
+        if ($state === 'choose_category') {
+            if (preg_match('/^\d+$/', $text)) {
+                return $this->confirmCategory((int) $text, $draft, $telegramUser, $log);
+            }
+
+            return $this->categoryQuestion($telegramUser, 'Balas dengan nomor kategori.');
+        }
+
+        return match ($text) {
+            '1' => $this->confirmDraft($draft, $telegramUser, $log),
+            '2' => $this->moveDraftToCategorySelection($draft, $telegramUser),
+            '3' => $this->cancelDraft($draft),
+            default => $this->confirmationQuestion($draft, $telegramUser),
         };
     }
 
     private function createDraftFromText(string $text, TelegramUser $telegramUser, TransactionLog $log): string
     {
         $parsed = $this->parser->parse($text);
+        $validation = $this->validationService->validate($parsed);
 
-        if (! $parsed->isComplete()) {
+        if (! $validation->valid) {
             $log->update([
                 'status' => TransactionLogStatus::Failed,
-                'error_code' => 'invalid_transaction_input',
-                'error_message' => 'Nominal atau deskripsi tidak ditemukan.',
+                'error_code' => $validation->errorCode,
+                'error_message' => $validation->message,
                 'processed_at' => now(),
             ]);
 
-            return $this->messageFormatter->incompleteInput();
+            return $this->responseService->validationError((string) $validation->message);
         }
 
         $categoryResolution = $this->categoryResolver->resolve($telegramUser->user, $parsed);
-        $category = $categoryResolution->category;
+        $category = $categoryResolution->category ?? ($parsed->type === TransactionType::Expense
+            ? $this->categoryResolver->fallbackExpenseCategory($telegramUser->user)
+            : null);
 
         $draft = TransactionDraft::query()->create([
             'user_id' => $telegramUser->user_id,
@@ -82,17 +95,19 @@ class TelegramTransactionConversationService
             'amount' => $parsed->amount,
             'currency' => 'IDR',
             'description' => $parsed->description,
-            'transaction_date' => now()->toDateString(),
+            'transaction_date' => ($parsed->transactionDate ?? now())->toDateString(),
             'transaction_time' => now()->format('H:i:s'),
             'raw_text' => $parsed->rawText,
             'confidence_score' => $parsed->confidenceScore,
             'parser_result' => [
                 'tokens' => $parsed->tokens,
-                'category_resolved' => $category !== null,
+                'category_slug' => $parsed->categorySlug,
+                'category_resolved' => $categoryResolution->category !== null,
                 'category_strategy' => $categoryResolution->strategy,
                 'category_confidence_score' => $categoryResolution->confidenceScore,
                 'category_reason' => $categoryResolution->reason,
                 'category_memory_id' => $categoryResolution->memory?->id,
+                'conversation_state' => 'confirm_transaction',
             ],
             'status' => TransactionDraftStatus::Pending,
             'expires_at' => now()->addMinutes(10),
@@ -108,7 +123,13 @@ class TelegramTransactionConversationService
             return $this->storeDraft($draft, $category, $telegramUser, $log, $categoryResolution->reason, false);
         }
 
-        return $this->categoryQuestion($telegramUser, $categoryResolution->reason, $categoryResolution->confidenceScore);
+        if (! $category) {
+            $this->moveDraftState($draft, 'choose_category');
+
+            return $this->categoryQuestion($telegramUser, $categoryResolution->reason, $categoryResolution->confidenceScore);
+        }
+
+        return $this->responseService->confirmationQuestion($draft, $category);
     }
 
     private function confirmCategory(int $choice, TransactionDraft $draft, TelegramUser $telegramUser, TransactionLog $log): string
@@ -135,6 +156,31 @@ class TelegramTransactionConversationService
         return $this->storeDraft($draft, $category, $telegramUser, $log, $reason, true);
     }
 
+    private function confirmDraft(TransactionDraft $draft, TelegramUser $telegramUser, TransactionLog $log): string
+    {
+        $category = $draft->category;
+
+        if (! $category) {
+            return $this->moveDraftToCategorySelection($draft, $telegramUser);
+        }
+
+        return $this->storeDraft($draft, $category, $telegramUser, $log, 'Transaksi dikonfirmasi manual.', false);
+    }
+
+    private function moveDraftToCategorySelection(TransactionDraft $draft, TelegramUser $telegramUser): string
+    {
+        $this->moveDraftState($draft, 'choose_category');
+
+        return $this->categoryQuestion($telegramUser, 'Pilih kategori yang sesuai.');
+    }
+
+    private function cancelDraft(TransactionDraft $draft): string
+    {
+        $draft->update(['status' => TransactionDraftStatus::Cancelled]);
+
+        return $this->responseService->cancelled();
+    }
+
     private function storeDraft(
         TransactionDraft $draft,
         Category $category,
@@ -154,7 +200,7 @@ class TelegramTransactionConversationService
                 'processed_at' => now(),
             ]);
 
-            return $this->messageFormatter->transactionSaved($transaction, $category, $reason, $learned);
+            return $this->responseService->transactionSaved($transaction, $category, $reason, $learned);
         } catch (Throwable $exception) {
             $log->update([
                 'status' => TransactionLogStatus::Failed,
@@ -171,11 +217,31 @@ class TelegramTransactionConversationService
 
     private function categoryQuestion(TelegramUser $telegramUser, string $reason = 'Kategori belum diketahui.', int $confidenceScore = 0): string
     {
-        return $this->messageFormatter->categoryQuestion(
+        return $this->responseService->categoryQuestion(
             $this->categoryResolver->choiceCategories($telegramUser->user),
             $reason,
             $confidenceScore,
         );
+    }
+
+    private function confirmationQuestion(TransactionDraft $draft, TelegramUser $telegramUser): string
+    {
+        $category = $draft->category ?? $this->categoryResolver->fallbackExpenseCategory($telegramUser->user);
+
+        if (! $category) {
+            return $this->moveDraftToCategorySelection($draft, $telegramUser);
+        }
+
+        return $this->responseService->confirmationQuestion($draft, $category);
+    }
+
+    private function moveDraftState(TransactionDraft $draft, string $state): void
+    {
+        $parserResult = $draft->parser_result ?? [];
+        $parserResult['conversation_state'] = $state;
+
+        $draft->update(['parser_result' => $parserResult]);
+        $draft->refresh();
     }
 
     private function pendingDraft(TelegramUser $telegramUser): ?TransactionDraft
@@ -190,16 +256,4 @@ class TelegramTransactionConversationService
             ->first();
     }
 
-    private function cancelPendingDraft(TelegramUser $telegramUser): string
-    {
-        $draft = $this->pendingDraft($telegramUser);
-
-        if (! $draft) {
-            return 'Tidak ada transaksi draft yang perlu dibatalkan.';
-        }
-
-        $draft->update(['status' => TransactionDraftStatus::Cancelled]);
-
-        return 'Draft transaksi dibatalkan.';
-    }
 }

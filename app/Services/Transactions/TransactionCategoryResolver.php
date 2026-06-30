@@ -15,6 +15,18 @@ class TransactionCategoryResolver
 
     public function resolve(User $user, ParsedTransactionData $parsed): CategoryResolutionData
     {
+        $explicitCategory = $this->resolveExplicitCategory($user, $parsed);
+
+        if ($explicitCategory) {
+            return new CategoryResolutionData(
+                category: $explicitCategory,
+                confidenceScore: 95,
+                reason: "Kategori dipilih dari input sebagai {$explicitCategory->name}.",
+                strategy: 'explicit_category_slug',
+                requiresConfirmation: false,
+            );
+        }
+
         if ($parsed->type === TransactionType::Expense) {
             $memoryResolution = $this->categoryMemoryService->resolve(
                 $user,
@@ -84,9 +96,11 @@ class TransactionCategoryResolver
     {
         $text = strtolower($description);
         $keywordMap = [
+            'food-drink' => ['kopi', 'makan', 'nasi', 'minum', 'sarapan', 'siang', 'malam', 'warung', 'resto'],
             'transport' => ['parkir', 'grab', 'gojek', 'bensin', 'tol', 'transport', 'ojek'],
             'shopping' => ['belanja', 'beli', 'mall', 'shopee', 'tokopedia'],
             'entertainment' => ['film', 'netflix', 'game', 'hiburan', 'bioskop'],
+            'bills' => ['subscription', 'langganan', 'tagihan', 'listrik', 'air', 'internet'],
         ];
 
         foreach ($keywordMap as $slug => $keywords) {
@@ -102,5 +116,32 @@ class TransactionCategoryResolver
         }
 
         return null;
+    }
+
+    private function resolveExplicitCategory(User $user, ParsedTransactionData $parsed): ?Category
+    {
+        if (! $parsed->categorySlug || ! $parsed->type) {
+            return null;
+        }
+
+        return Category::query()
+            ->where('user_id', $user->id)
+            ->where('type', $parsed->type)
+            ->where('is_active', true)
+            ->where('slug', $parsed->categorySlug)
+            ->first();
+    }
+
+    public function fallbackExpenseCategory(User $user): ?Category
+    {
+        return Category::query()
+            ->where('user_id', $user->id)
+            ->where('type', TransactionType::Expense)
+            ->where('is_active', true)
+            ->where(function ($query): void {
+                $query->where('slug', 'other-expense')->orWhere('slug', 'food-drink');
+            })
+            ->orderByRaw("case when slug = 'other-expense' then 0 else 1 end")
+            ->first();
     }
 }
