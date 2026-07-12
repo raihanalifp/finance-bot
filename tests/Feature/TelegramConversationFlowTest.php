@@ -143,6 +143,11 @@ class TelegramConversationFlowTest extends TestCase
         ]);
 
         $this->postTelegram('/help')->assertOk();
+        $this->assertTelegramSent('Daftar command:');
+        $this->assertTelegramSent('/format - Menampilkan format input transaksi.');
+        $this->assertTelegramSent('/month from=YYYY-MM-DD to=YYYY-MM-DD');
+
+        $this->postTelegram('/format')->assertOk();
         $this->assertTelegramSent('Format transaksi:');
 
         $this->postTelegram('/today')->assertOk();
@@ -150,6 +155,8 @@ class TelegramConversationFlowTest extends TestCase
 
         $this->postTelegram('/month')->assertOk();
         $this->assertTelegramSent('Ringkasan bulan berjalan');
+        $this->assertTelegramSent('Per kategori:');
+        $this->assertTelegramSent('Food & Drink: Rp18.000 (1 trx)');
 
         $this->postTelegram('/last')->assertOk();
         $this->assertTelegramSent('Transaksi terakhir:');
@@ -182,6 +189,67 @@ class TelegramConversationFlowTest extends TestCase
         $this->postTelegram('/undo')->assertOk();
 
         $this->assertTelegramSent('Tidak ada transaksi Telegram terakhir yang bisa dibatalkan');
+    }
+
+    public function test_month_command_accepts_date_range_and_returns_category_breakdown(): void
+    {
+        $food = Category::query()->where('user_id', $this->user->id)->where('slug', 'food-drink')->firstOrFail();
+        $transport = Category::query()->where('user_id', $this->user->id)->where('slug', 'transport')->firstOrFail();
+        $salary = Category::query()->where('user_id', $this->user->id)->where('slug', 'salary')->firstOrFail();
+
+        Transaction::factory()->create([
+            'user_id' => $this->user->id,
+            'category_id' => $food->id,
+            'type' => TransactionType::Expense,
+            'amount' => 18000,
+            'description' => 'kopi',
+            'transaction_date' => '2026-06-05',
+        ]);
+
+        Transaction::factory()->create([
+            'user_id' => $this->user->id,
+            'category_id' => $transport->id,
+            'type' => TransactionType::Expense,
+            'amount' => 25000,
+            'description' => 'gojek',
+            'transaction_date' => '2026-06-15',
+        ]);
+
+        Transaction::factory()->create([
+            'user_id' => $this->user->id,
+            'category_id' => $salary->id,
+            'type' => TransactionType::Income,
+            'amount' => 5000000,
+            'description' => 'gaji',
+            'transaction_date' => '2026-06-10',
+        ]);
+
+        Transaction::factory()->create([
+            'user_id' => $this->user->id,
+            'category_id' => $food->id,
+            'type' => TransactionType::Expense,
+            'amount' => 99000,
+            'description' => 'outside range',
+            'transaction_date' => '2026-05-31',
+        ]);
+
+        $this->postTelegram('/month from=2026-06-01 to=2026-06-15')->assertOk();
+
+        $this->assertTelegramSent('Ringkasan periode');
+        $this->assertTelegramSent('2026-06-01 s/d 2026-06-15');
+        $this->assertTelegramSent('Pemasukan: Rp5.000.000');
+        $this->assertTelegramSent('Pengeluaran: Rp43.000');
+        $this->assertTelegramSent('Salary: Rp5.000.000 (1 trx)');
+        $this->assertTelegramSent('Food & Drink: Rp18.000 (1 trx)');
+        $this->assertTelegramSent('Transport: Rp25.000 (1 trx)');
+    }
+
+    public function test_month_command_returns_guidance_for_invalid_date_range(): void
+    {
+        $this->postTelegram('/month from=abc to=2026-06-30')->assertOk();
+
+        $this->assertTelegramSent('Format tanggal harus YYYY-MM-DD.');
+        $this->assertTelegramSent('/month from=2026-06-01 to=2026-06-30');
     }
 
     public function test_confirmation_flow_can_save_or_cancel_ambiguous_category(): void

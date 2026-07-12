@@ -16,8 +16,10 @@ class CommandRouter
 
     public function handle(string $text, TelegramUser $telegramUser, TransactionLog $log): string
     {
-        $command = strtolower(strtok(trim($text), ' ') ?: '');
+        $parts = preg_split('/\s+/', trim($text), 2);
+        $command = strtolower($parts[0] ?? '');
+        $arguments = trim($parts[1] ?? '');
 
-        return $this->commandService->handle($command, $telegramUser, $log);
+        return $this->commandService->handle($command, $arguments, $telegramUser, $log);
     }
 }

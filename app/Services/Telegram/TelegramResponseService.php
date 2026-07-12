@@ -13,12 +13,43 @@ class TelegramResponseService
 {
     public function startHelp(): string
     {
-        return "Bot finance aktif.\n\nKirim transaksi seperti:\nkopi 18000\nmakan 35000 food\ngaji 8000000 income\nincome freelance 2000000 2026-06-26\n\nKetik /help untuk bantuan.";
+        return "Bot finance aktif.\n\nKirim transaksi seperti:\nkopi 18000\nmakan 35000 food\ngaji 8000000 income\nincome freelance 2000000 2026-06-26\n\nKetik /help untuk daftar command atau /format untuk format input transaksi.";
+    }
+
+    public function commandsHelp(): string
+    {
+        return implode("\n", [
+            'Daftar command:',
+            '',
+            '/start - Menampilkan intro singkat bot.',
+            '/help - Menampilkan semua command dan fungsinya.',
+            '/format - Menampilkan format input transaksi.',
+            '/today - Ringkasan transaksi hari ini.',
+            '/month - Ringkasan bulan berjalan plus rincian per kategori.',
+            '/month from=YYYY-MM-DD to=YYYY-MM-DD - Ringkasan periode custom plus rincian per kategori.',
+            '/last - Menampilkan transaksi Telegram terakhir.',
+            '/undo - Membatalkan transaksi Telegram terakhir dalam 15 menit.',
+            '/categories - Menampilkan kategori aktif.',
+            '/cancel - Membatalkan draft transaksi yang sedang pending.',
+            '',
+            'Input transaksi tanpa command:',
+            '[deskripsi] [nominal] [tipe opsional] [kategori opsional] [tanggal opsional]',
+            '',
+            'Contoh:',
+            'kopi 18000',
+            'makan 35000 food',
+            'income freelance 2000000 2026-06-26',
+            '',
+            'Balasan saat konfirmasi draft:',
+            '1 untuk simpan',
+            '2 untuk ubah kategori',
+            '3 untuk batal',
+        ]);
     }
 
     public function inputHelp(): string
     {
-        return "Format transaksi:\n[deskripsi] [nominal] [tipe opsional] [kategori opsional] [tanggal opsional]\n\nContoh:\nkopi 18000\nmakan 35000 food\ngaji 8000000 income\nincome freelance 2000000 2026-06-26";
+        return "Format transaksi:\n[deskripsi] [nominal] [tipe opsional] [kategori opsional] [tanggal opsional]\n\nTipe:\nincome, pemasukan, masuk\nexpense, pengeluaran, keluar\n\nNominal:\n18000, 18k, 18rb, 18ribu, 2jt, 2juta\n\nTanggal:\nYYYY-MM-DD atau yesterday\n\nContoh:\nkopi 18000\nmakan 35000 food\ngaji 8000000 income\nincome freelance 2000000 2026-06-26";
     }
 
     public function validationError(string $message): string
@@ -96,6 +127,11 @@ class TelegramResponseService
         return 'Command belum dikenal. Ketik /help untuk bantuan.';
     }
 
+    public function dateRangeError(string $message): string
+    {
+        return $message."\n\nContoh:\n/month from=2026-06-01 to=2026-06-30";
+    }
+
     public function summary(string $title, float $income, float $expense, int $count): string
     {
         return implode("\n", [
@@ -106,6 +142,51 @@ class TelegramResponseService
             'Net: '.$this->money($income - $expense),
             'Transaksi: '.$count,
         ]);
+    }
+
+    /** @param array<string, array<int, array{name: string, total: float, count: int}>> $categoryBreakdown */
+    public function detailedSummary(
+        string $title,
+        string $startDate,
+        string $endDate,
+        float $income,
+        float $expense,
+        int $count,
+        array $categoryBreakdown,
+    ): string {
+        $lines = [
+            $title,
+            $startDate.' s/d '.$endDate,
+            '',
+            'Pemasukan: '.$this->money($income),
+            'Pengeluaran: '.$this->money($expense),
+            'Net: '.$this->money($income - $expense),
+            'Transaksi: '.$count,
+            '',
+            'Per kategori:',
+        ];
+
+        $this->appendCategoryBreakdown($lines, 'Income', $categoryBreakdown[TransactionType::Income->value] ?? []);
+        $this->appendCategoryBreakdown($lines, 'Expense', $categoryBreakdown[TransactionType::Expense->value] ?? []);
+
+        return implode("\n", $lines);
+    }
+
+    /** @param array<int, array{name: string, total: float, count: int}> $items */
+    private function appendCategoryBreakdown(array &$lines, string $label, array $items): void
+    {
+        $lines[] = '';
+        $lines[] = $label.':';
+
+        if ($items === []) {
+            $lines[] = '- Tidak ada transaksi';
+
+            return;
+        }
+
+        foreach ($items as $item) {
+            $lines[] = '- '.$item['name'].': '.$this->money($item['total']).' ('.$item['count'].' trx)';
+        }
     }
 
     public function noLastTransaction(): string
