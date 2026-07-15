@@ -18,10 +18,6 @@ class CategoryMemoryService
 
     public function resolve(User $user, string $description, TransactionType $type): CategoryResolutionData
     {
-        if ($type !== TransactionType::Expense) {
-            return CategoryResolutionData::unresolved('Category memory hanya diterapkan untuk expense pada fase ini.');
-        }
-
         $normalized = $this->normalize($description);
 
         if ($normalized === '') {

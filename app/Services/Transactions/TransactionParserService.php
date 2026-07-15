@@ -10,6 +10,7 @@ class TransactionParserService
 {
     /** @var array<string, string> */
     private const CATEGORY_ALIASES = [
+        // Expense
         'food' => 'food-drink',
         'food-drink' => 'food-drink',
         'makanan' => 'food-drink',
@@ -27,6 +28,20 @@ class TransactionParserService
         'education' => 'education',
         'family' => 'family',
         'other-expense' => 'other-expense',
+        // Income
+        'salary' => 'salary',
+        'gaji' => 'salary',
+        'bonus' => 'bonus',
+        'freelance' => 'freelance',
+        'project' => 'freelance',
+        'gift' => 'gift',
+        'hadiah' => 'gift',
+        'investment' => 'investment',
+        'investasi' => 'investment',
+        'dividen' => 'investment',
+        'other-income' => 'other-income',
+        'other' => 'other-income',
+        'lain' => 'other-income',
     ];
 
     public function __construct(private readonly AmountParser $amountParser) {}
@@ -83,7 +98,9 @@ class TransactionParserService
         ));
 
         $description = trim(implode(' ', $descriptionTokens));
-        $type ??= $this->detectTypeFromDescription($descriptionTokens) ?? TransactionType::Expense;
+        $type ??= $this->detectTypeFromDescription($descriptionTokens)
+            ?? $this->detectTypeFromDescription($tokens)
+            ?? TransactionType::Expense;
         $confidence = 40;
 
         if ($amount !== null) {

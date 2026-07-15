@@ -53,6 +53,34 @@ class TransactionCategoryResolver
             return $memoryResolution;
         }
 
+        // Income: coba memory & keyword matching dulu
+        $memoryResolution = $this->categoryMemoryService->resolve(
+            $user,
+            $parsed->description ?? '',
+            $parsed->type,
+        );
+
+        if ($memoryResolution->category && ! $memoryResolution->requiresConfirmation) {
+            return $memoryResolution;
+        }
+
+        $ruleCategory = $this->resolveIncomeCategory($user, $parsed->description ?? '');
+
+        if ($ruleCategory) {
+            return new CategoryResolutionData(
+                category: $ruleCategory,
+                confidenceScore: 80,
+                reason: "Cocok dengan rule keyword income untuk {$ruleCategory->name}.",
+                strategy: 'income_rule_keyword',
+                requiresConfirmation: false,
+            );
+        }
+
+        if ($memoryResolution->category) {
+            return $memoryResolution;
+        }
+
+        // Default: fallback ke salary atau other-income
         $category = Category::query()
             ->where('user_id', $user->id)
             ->where('type', TransactionType::Income)
@@ -75,8 +103,50 @@ class TransactionCategoryResolver
         );
     }
 
-    public function choiceCategories(User $user): array
+    private function resolveIncomeCategory(User $user, string $description): ?Category
     {
+        $text = strtolower($description);
+        $keywordMap = [
+            'salary' => ['gaji', 'salary', 'upah', 'honor'],
+            'bonus' => ['bonus', 'thr', 'bonus'],
+            'freelance' => ['freelance', 'project', 'proyek', 'order'],
+            'gift' => ['gift', 'hadiah', 'kado', 'pemberian'],
+            'investment' => ['investasi', 'investment', 'dividen', 'saham', 'crypto', 'reksadana'],
+        ];
+
+        foreach ($keywordMap as $slug => $keywords) {
+            foreach ($keywords as $keyword) {
+                if (str_contains($text, $keyword)) {
+                    return Category::query()
+                        ->where('user_id', $user->id)
+                        ->where('type', TransactionType::Income)
+                        ->where('slug', $slug)
+                        ->first();
+                }
+            }
+        }
+
+        return null;
+    }
+
+    public function choiceCategories(User $user, ?TransactionType $type = null): array
+    {
+        if ($type === TransactionType::Income) {
+            $preferredSlugs = ['salary', 'bonus', 'freelance', 'gift', 'investment', 'other-income'];
+
+            $categories = Category::query()
+                ->where('user_id', $user->id)
+                ->where('type', TransactionType::Income)
+                ->whereIn('slug', $preferredSlugs)
+                ->get()
+                ->keyBy('slug');
+
+            return array_values(array_filter(array_map(
+                fn (string $slug): ?Category => $categories->get($slug),
+                $preferredSlugs
+            )));
+        }
+
         $preferredSlugs = ['food-drink', 'transport', 'shopping', 'entertainment', 'other-expense'];
 
         $categories = Category::query()

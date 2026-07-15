@@ -55,7 +55,7 @@ class TelegramTransactionConversationService
                 return $this->confirmCategory((int) $text, $draft, $telegramUser, $log);
             }
 
-            return $this->categoryQuestion($telegramUser, 'Balas dengan nomor kategori.');
+            return $this->categoryQuestion($telegramUser, 'Balas dengan nomor kategori.', type: $draft->type);
         }
 
         return match ($text) {
@@ -83,9 +83,17 @@ class TelegramTransactionConversationService
         }
 
         $categoryResolution = $this->categoryResolver->resolve($telegramUser->user, $parsed);
-        $category = $categoryResolution->category ?? ($parsed->type === TransactionType::Expense
-            ? $this->categoryResolver->fallbackExpenseCategory($telegramUser->user)
-            : null);
+        $category = $categoryResolution->category ?? match ($parsed->type) {
+            TransactionType::Expense => $this->categoryResolver->fallbackExpenseCategory($telegramUser->user),
+            TransactionType::Income => Category::query()
+                ->where('user_id', $telegramUser->user_id)
+                ->where('type', TransactionType::Income)
+                ->where('is_active', true)
+                ->whereIn('slug', ['salary', 'other-income'])
+                ->orderByRaw("case when slug = 'other-income' then 0 else 1 end")
+                ->first(),
+            default => null,
+        };
 
         $draft = TransactionDraft::query()->create([
             'user_id' => $telegramUser->user_id,
@@ -126,7 +134,7 @@ class TelegramTransactionConversationService
         if (! $category) {
             $this->moveDraftState($draft, 'choose_category');
 
-            return $this->categoryQuestion($telegramUser, $categoryResolution->reason, $categoryResolution->confidenceScore);
+            return $this->categoryQuestion($telegramUser, $categoryResolution->reason, $categoryResolution->confidenceScore, type: $draft->type);
         }
 
         return $this->responseService->confirmationQuestion($draft, $category);
@@ -134,11 +142,11 @@ class TelegramTransactionConversationService
 
     private function confirmCategory(int $choice, TransactionDraft $draft, TelegramUser $telegramUser, TransactionLog $log): string
     {
-        $categories = $this->categoryResolver->choiceCategories($telegramUser->user);
+        $categories = $this->categoryResolver->choiceCategories($telegramUser->user, $draft->type);
         $category = $categories[$choice - 1] ?? null;
 
         if (! $category) {
-            return $this->categoryQuestion($telegramUser);
+            return $this->categoryQuestion($telegramUser, type: $draft->type);
         }
 
         $memory = $this->categoryMemoryService->learn(
@@ -171,7 +179,7 @@ class TelegramTransactionConversationService
     {
         $this->moveDraftState($draft, 'choose_category');
 
-        return $this->categoryQuestion($telegramUser, 'Pilih kategori yang sesuai.');
+        return $this->categoryQuestion($telegramUser, 'Pilih kategori yang sesuai.', type: $draft->type);
     }
 
     private function cancelDraft(TransactionDraft $draft): string
@@ -215,10 +223,10 @@ class TelegramTransactionConversationService
         }
     }
 
-    private function categoryQuestion(TelegramUser $telegramUser, string $reason = 'Kategori belum diketahui.', int $confidenceScore = 0): string
+    private function categoryQuestion(TelegramUser $telegramUser, string $reason = 'Kategori belum diketahui.', int $confidenceScore = 0, ?TransactionType $type = null): string
     {
         return $this->responseService->categoryQuestion(
-            $this->categoryResolver->choiceCategories($telegramUser->user),
+            $this->categoryResolver->choiceCategories($telegramUser->user, $type),
             $reason,
             $confidenceScore,
         );
@@ -226,7 +234,21 @@ class TelegramTransactionConversationService
 
     private function confirmationQuestion(TransactionDraft $draft, TelegramUser $telegramUser): string
     {
-        $category = $draft->category ?? $this->categoryResolver->fallbackExpenseCategory($telegramUser->user);
+        $category = $draft->category;
+
+        if (! $category) {
+            if ($draft->type === TransactionType::Income) {
+                $category = Category::query()
+                    ->where('user_id', $telegramUser->user_id)
+                    ->where('type', TransactionType::Income)
+                    ->where('is_active', true)
+                    ->whereIn('slug', ['salary', 'other-income'])
+                    ->orderByRaw("case when slug = 'other-income' then 0 else 1 end")
+                    ->first();
+            } else {
+                $category = $this->categoryResolver->fallbackExpenseCategory($telegramUser->user);
+            }
+        }
 
         if (! $category) {
             return $this->moveDraftToCategorySelection($draft, $telegramUser);
